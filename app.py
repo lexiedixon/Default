@@ -145,14 +145,15 @@ if not stock_data and not commodity_data and not crypto_raw:
     st.error("Could not fetch any market data. Check your internet connection and try refreshing.")
     st.stop()
 
-top_picks = get_top_picks(
-    stock_data,
-    commodity_data,
-    crypto_raw,
-    risk_level=risk_level,
-    include_crypto=include_crypto,
-    include_commodities=include_commodities,
-    top_n=top_n,
+short_picks = get_top_picks(
+    stock_data, commodity_data, crypto_raw,
+    risk_level=risk_level, include_crypto=include_crypto,
+    include_commodities=include_commodities, top_n=top_n, time_horizon="short",
+)
+long_picks = get_top_picks(
+    stock_data, commodity_data, crypto_raw,
+    risk_level=risk_level, include_crypto=include_crypto,
+    include_commodities=include_commodities, top_n=top_n, time_horizon="long",
 )
 
 
@@ -187,13 +188,29 @@ for i, sym in enumerate(["BTC", "ETH"]):
             pulse_cols[col_idx].metric(sym, f"${price:,.0f}", f"{chg:+.2%}", delta_color=color)
 
 
-# ── Top Recommendations ───────────────────────────────────────────────────────
-st.subheader(f"🏆 Top {len(top_picks)} Recommendations — {risk_level} Strategy")
+# ── Recommendations Tabs ─────────────────────────────────────────────────────
+st.subheader(f"🏆 Top Recommendations — {risk_level} Strategy")
 
-if not top_picks:
-    st.info("No recommendations available with current filters.")
-else:
-    for rank, asset in enumerate(top_picks, 1):
+tab_short, tab_long = st.tabs(["⚡ Short-Term  (Days – Weeks)", "📈 Long-Term  (Months – Years)"])
+
+
+def render_picks(picks: list[dict], time_horizon: str):
+    if not picks:
+        st.info("No recommendations available with current filters.")
+        return
+
+    if time_horizon == "short":
+        st.caption(
+            "Ranked by recent momentum, volume surge, and news sentiment. "
+            "Best suited for active traders looking for near-term price moves."
+        )
+    else:
+        st.caption(
+            "Ranked by sustained 90-day trend, consistency, and low volatility. "
+            "Best suited for investors building positions to hold over months."
+        )
+
+    for rank, asset in enumerate(picks, 1):
         score = asset["score"]
         badge_class = "score-high" if score >= 65 else ("score-mid" if score >= 40 else "score-low")
 
@@ -204,20 +221,18 @@ else:
         ):
             col1, col2, col3, col4 = st.columns(4)
             price = asset["price"]
-            ret7 = asset["return_7d"]
-            ret30 = asset["return_30d"]
 
             col1.metric("Price", f"${price:,.4f}" if price < 1 else f"${price:,.2f}")
-            col2.metric(
-                "7-Day Return",
-                f"{ret7:+.2%}",
-                delta_color="normal" if ret7 >= 0 else "inverse",
-            )
-            col3.metric(
-                "30-Day Return",
-                f"{ret30:+.2%}",
-                delta_color="normal" if ret30 >= 0 else "inverse",
-            )
+            if time_horizon == "short":
+                ret7 = asset["return_7d"]
+                ret30 = asset["return_30d"]
+                col2.metric("7-Day Return", f"{ret7:+.2%}", delta_color="normal" if ret7 >= 0 else "inverse")
+                col3.metric("30-Day Return", f"{ret30:+.2%}", delta_color="normal" if ret30 >= 0 else "inverse")
+            else:
+                ret30 = asset["return_30d"]
+                ret90 = asset["return_90d"]
+                col2.metric("30-Day Return", f"{ret30:+.2%}", delta_color="normal" if ret30 >= 0 else "inverse")
+                col3.metric("90-Day Return", f"{ret90:+.2%}", delta_color="normal" if ret90 >= 0 else "inverse")
             col4.metric("RSI", f"{asset['rsi']:.1f}")
 
             if asset["signals"]:
@@ -230,7 +245,6 @@ else:
                 unsafe_allow_html=True,
             )
 
-            # Price chart
             if asset["history"] is not None:
                 hist = asset["history"].tail(60)
                 fig = go.Figure()
@@ -254,7 +268,6 @@ else:
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
-            # News
             news = asset.get("news", [])
             if news:
                 st.markdown("**Recent News**")
@@ -267,21 +280,32 @@ else:
                     st.markdown(f"- [{title}]({link})  <small style='color:gray'>{publisher} · {date_str}</small>", unsafe_allow_html=True)
 
 
+with tab_short:
+    render_picks(short_picks, "short")
+
+with tab_long:
+    render_picks(long_picks, "long")
+
+
 # ── All Assets Table ──────────────────────────────────────────────────────────
 st.divider()
 st.subheader("📋 Full Asset Scorecard")
 
-all_scored = get_top_picks(
-    stock_data,
-    commodity_data,
-    crypto_raw,
-    risk_level=risk_level,
-    include_crypto=include_crypto,
-    include_commodities=include_commodities,
-    top_n=500,
+all_short = get_top_picks(
+    stock_data, commodity_data, crypto_raw,
+    risk_level=risk_level, include_crypto=include_crypto,
+    include_commodities=include_commodities, top_n=500, time_horizon="short",
 )
+all_long = get_top_picks(
+    stock_data, commodity_data, crypto_raw,
+    risk_level=risk_level, include_crypto=include_crypto,
+    include_commodities=include_commodities, top_n=500, time_horizon="long",
+)
+all_scored = all_short  # use short for the scatter plot reference
 
-if all_scored:
+long_score_map = {a["ticker"]: a["score"] for a in all_long}
+
+if all_short:
     df = pd.DataFrame([
         {
             "Ticker": a["ticker"],
@@ -290,10 +314,12 @@ if all_scored:
             "Price": a["price"],
             "7D Return": a["return_7d"],
             "30D Return": a["return_30d"],
+            "90D Return": a["return_90d"],
             "RSI": a["rsi"],
-            "Score": a["score"],
+            "Short-Term Score": a["score"],
+            "Long-Term Score": long_score_map.get(a["ticker"], 0.0),
         }
-        for a in all_scored
+        for a in all_short
     ])
 
     def color_return(val):
@@ -313,11 +339,13 @@ if all_scored:
             "Price": lambda v: f"${v:,.4f}" if v < 1 else f"${v:,.2f}",
             "7D Return": "{:+.2%}",
             "30D Return": "{:+.2%}",
+            "90D Return": "{:+.2%}",
             "RSI": "{:.1f}",
-            "Score": "{:.1f}",
+            "Short-Term Score": "{:.1f}",
+            "Long-Term Score": "{:.1f}",
         })
-        .map(color_return, subset=["7D Return", "30D Return"])
-        .map(color_score, subset=["Score"])
+        .map(color_return, subset=["7D Return", "30D Return", "90D Return"])
+        .map(color_score, subset=["Short-Term Score", "Long-Term Score"])
     )
     st.dataframe(styled, use_container_width=True, height=450)
 
