@@ -193,7 +193,7 @@ def generate_explanation(asset: dict, time_horizon: str) -> str:
     return " ".join(parts)
 
 
-
+def analyze_yfinance_asset(data: dict, risk_level: str, time_horizon: str) -> dict:
     hist = data["history"]
     closes = hist["Close"]
     ticker = data["ticker"]

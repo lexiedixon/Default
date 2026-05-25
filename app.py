@@ -11,6 +11,7 @@ from data_fetcher import (
     STOCK_UNIVERSE,
 )
 from analyzer import get_top_picks
+from news_analyzer import enrich_picks_with_news_analysis
 
 st.set_page_config(
     page_title="Investment Finder",
@@ -156,6 +157,12 @@ long_picks = get_top_picks(
     include_commodities=include_commodities, top_n=top_n, time_horizon="long",
 )
 
+_anthropic_key = st.secrets.get("ANTHROPIC_API_KEY", "") if hasattr(st, "secrets") else ""
+if _anthropic_key and any_live:
+    with st.spinner("Analyzing current events with Claude AI…"):
+        enrich_picks_with_news_analysis(short_picks, _anthropic_key)
+        enrich_picks_with_news_analysis(long_picks, _anthropic_key)
+
 
 # ── Market Pulse ─────────────────────────────────────────────────────────────
 st.subheader("📊 Market Pulse")
@@ -251,6 +258,34 @@ def render_picks(picks: list[dict], time_horizon: str):
                     f"<div style='background:#f8f9fa;border-left:3px solid #6c757d;"
                     f"padding:10px 14px;border-radius:4px;margin:10px 0;"
                     f"font-size:0.9em;line-height:1.6'>{explanation}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            news_analysis = asset.get("news_analysis")
+            if news_analysis:
+                outlook = news_analysis.get("outlook", "Neutral")
+                outlook_colors = {
+                    "Bullish":       ("#d4edda", "#155724", "▲"),
+                    "Mildly Bullish": ("#d4edda", "#155724", "▲"),
+                    "Neutral":       ("#e9ecef", "#495057", "■"),
+                    "Mildly Bearish": ("#f8d7da", "#721c24", "▼"),
+                    "Bearish":       ("#f8d7da", "#721c24", "▼"),
+                }
+                bg, fg, icon = outlook_colors.get(outlook, ("#e9ecef", "#495057", "■"))
+                summary = news_analysis.get("summary", "")
+                key_events = news_analysis.get("key_events", [])
+                events_html = "".join(
+                    f"<li style='margin:2px 0'>{e}</li>" for e in key_events
+                )
+                st.markdown(
+                    f"<div style='background:#f0f4ff;border-left:3px solid #4a6cf7;"
+                    f"padding:10px 14px;border-radius:4px;margin:10px 0;font-size:0.9em'>"
+                    f"<strong>📰 Current Events Analysis</strong> &nbsp;"
+                    f"<span style='background:{bg};color:{fg};padding:2px 8px;"
+                    f"border-radius:10px;font-size:0.85em'>{icon} {outlook}</span><br>"
+                    f"<span style='line-height:1.6'>{summary}</span>"
+                    + (f"<ul style='margin:6px 0 0 0;padding-left:18px'>{events_html}</ul>" if key_events else "")
+                    + "</div>",
                     unsafe_allow_html=True,
                 )
 
