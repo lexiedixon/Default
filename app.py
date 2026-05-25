@@ -225,6 +225,7 @@ def render_picks(picks: list[dict], time_horizon: str):
             f"#{rank}  {asset['name']} ({asset['ticker']})  —  "
             f"{asset['asset_class']}  |  Score: {score}/100",
             expanded=(rank <= 3),
+            key=f"exp_{time_horizon}_{rank}_{asset['ticker']}",
         ):
             col1, col2, col3, col4 = st.columns(4)
             price = asset["price"]
@@ -310,7 +311,7 @@ def render_picks(picks: list[dict], time_horizon: str):
                     plot_bgcolor="rgba(0,0,0,0)",
                     paper_bgcolor="rgba(0,0,0,0)",
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"chart_{time_horizon}_{rank}_{asset['ticker']}")
 
             news = asset.get("news", [])
             if news:
