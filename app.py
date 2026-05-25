@@ -48,6 +48,44 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+def compute_allocations(picks: list[dict], budget: float, risk_level: str) -> list[float]:
+    """Score-weighted allocations with per-position concentration caps."""
+    if not picks or budget <= 0:
+        return [0.0] * len(picks)
+    caps = {"Conservative": 0.15, "Moderate": 0.25, "Aggressive": 0.40}
+    cap = budget * caps.get(risk_level, 0.25)
+    scores = [max(p["score"], 1.0) for p in picks]
+    allocs = [(s / sum(scores)) * budget for s in scores]
+    # Iteratively redistribute amounts that exceed the cap
+    for _ in range(10):
+        excess = sum(max(0.0, a - cap) for a in allocs)
+        if excess < 0.01:
+            break
+        allocs = [min(a, cap) for a in allocs]
+        room = [a for a in allocs if a < cap]
+        if not room:
+            break
+        room_total = sum(room)
+        allocs = [
+            a + excess * (a / room_total) if a < cap else a
+            for a in allocs
+        ]
+    return allocs
+
+
+def sell_exit_pct(score: float) -> tuple[str, float]:
+    """Returns (label, fraction) for how much of a position to exit."""
+    if score >= 75:
+        return "Exit fully", 1.00
+    if score >= 60:
+        return "Reduce ~75%", 0.75
+    if score >= 45:
+        return "Reduce ~50%", 0.50
+    if score >= 30:
+        return "Trim ~25%", 0.25
+    return "Consider trimming", 0.10
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚙️ Settings")
@@ -75,6 +113,17 @@ with st.sidebar:
     )
 
     top_n = st.slider("Top recommendations to show", 5, 20, 10)
+
+    st.subheader("Budget")
+    monthly_budget = st.number_input(
+        "Monthly investment budget ($)",
+        min_value=0,
+        max_value=10_000_000,
+        value=1_000,
+        step=100,
+        format="%d",
+        help="Enter 0 to hide position sizing.",
+    )
 
     st.divider()
     refresh_clicked = st.button("🔄 Refresh Data", type="primary", use_container_width=True)
@@ -212,7 +261,7 @@ st.subheader(f"🏆 Top Recommendations — {risk_level} Strategy")
 tab_short, tab_long = st.tabs(["⚡ Short-Term  (Days – Weeks)", "📈 Long-Term  (Months – Years)"])
 
 
-def render_picks(picks: list[dict], time_horizon: str):
+def render_picks(picks: list[dict], time_horizon: str, budget: float, risk_lv: str):
     if not picks:
         st.info("No recommendations available with current filters.")
         return
@@ -228,7 +277,9 @@ def render_picks(picks: list[dict], time_horizon: str):
             "Best suited for investors building positions to hold over months."
         )
 
-    for rank, asset in enumerate(picks, 1):
+    allocations = compute_allocations(picks, budget, risk_lv)
+
+    for rank, (asset, alloc) in enumerate(zip(picks, allocations), 1):
         score = asset["score"]
         badge_class = "score-high" if score >= 65 else ("score-mid" if score >= 40 else "score-low")
 
@@ -238,9 +289,22 @@ def render_picks(picks: list[dict], time_horizon: str):
             expanded=(rank <= 3),
             key=f"exp_{time_horizon}_{rank}_{asset['ticker']}",
         ):
-            col1, col2, col3, col4 = st.columns(4)
             price = asset["price"]
 
+            if budget > 0 and alloc > 0:
+                qty = alloc / price if price > 0 else 0
+                qty_str = f"{qty:,.4f}" if qty < 1 else f"{qty:,.2f}"
+                unit = "coins" if asset["asset_class"] == "Crypto" else "shares"
+                st.markdown(
+                    f"<div style='background:#e8f5e9;border-left:3px solid #28a745;"
+                    f"padding:8px 14px;border-radius:4px;margin-bottom:10px;"
+                    f"font-size:0.92em'>"
+                    f"💰 <strong>Suggested allocation: ${alloc:,.0f}</strong>"
+                    f" &nbsp;·&nbsp; ~{qty_str} {unit} at ${price:,.2f}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            col1, col2, col3, col4 = st.columns(4)
             col1.metric("Price", f"${price:,.4f}" if price < 1 else f"${price:,.2f}")
             if time_horizon == "short":
                 ret7 = asset["return_7d"]
@@ -337,10 +401,10 @@ def render_picks(picks: list[dict], time_horizon: str):
 
 
 with tab_short:
-    render_picks(short_picks, "short")
+    render_picks(short_picks, "short", monthly_budget, risk_level)
 
 with tab_long:
-    render_picks(long_picks, "long")
+    render_picks(long_picks, "long", monthly_budget, risk_level)
 
 
 # ── Sell / Exit Signals ───────────────────────────────────────────────────────
@@ -356,7 +420,7 @@ sell_tab_short, sell_tab_long = st.tabs(
 )
 
 
-def render_sell_picks(picks: list[dict], time_horizon: str):
+def render_sell_picks(picks: list[dict], time_horizon: str, budget: float):
     if not picks:
         st.info("No sell signals with current filters.")
         return
@@ -382,8 +446,25 @@ def render_sell_picks(picks: list[dict], time_horizon: str):
             expanded=(rank <= 3),
             key=f"sell_exp_{time_horizon}_{rank}_{asset['ticker']}",
         ):
-            col1, col2, col3, col4 = st.columns(4)
             price = asset["price"]
+
+            if budget > 0:
+                action_label, exit_frac = sell_exit_pct(score)
+                exit_value = budget * exit_frac
+                qty = exit_value / price if price > 0 else 0
+                qty_str = f"{qty:,.4f}" if qty < 1 else f"{qty:,.2f}"
+                unit = "coins" if asset["asset_class"] == "Crypto" else "shares"
+                st.markdown(
+                    f"<div style='background:#fff5f5;border-left:3px solid #dc3545;"
+                    f"padding:8px 14px;border-radius:4px;margin-bottom:10px;"
+                    f"font-size:0.92em'>"
+                    f"🔴 <strong>{action_label}</strong>"
+                    f" &nbsp;·&nbsp; {int(exit_frac * 100)}% of position"
+                    f" (~{qty_str} {unit} worth ~${exit_value:,.0f} at ${price:,.2f})</div>",
+                    unsafe_allow_html=True,
+                )
+
+            col1, col2, col3, col4 = st.columns(4)
             col1.metric("Price", f"${price:,.4f}" if price < 1 else f"${price:,.2f}")
             if time_horizon == "short":
                 ret7  = asset["return_7d"]
@@ -457,10 +538,10 @@ def render_sell_picks(picks: list[dict], time_horizon: str):
 
 
 with sell_tab_short:
-    render_sell_picks(short_sell_picks, "short")
+    render_sell_picks(short_sell_picks, "short", monthly_budget)
 
 with sell_tab_long:
-    render_sell_picks(long_sell_picks, "long")
+    render_sell_picks(long_sell_picks, "long", monthly_budget)
 
 
 # ── All Assets Table ──────────────────────────────────────────────────────────
