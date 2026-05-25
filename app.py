@@ -245,6 +245,15 @@ def render_picks(picks: list[dict], time_horizon: str):
                 unsafe_allow_html=True,
             )
 
+            explanation = asset.get("explanation", "")
+            if explanation:
+                st.markdown(
+                    f"<div style='background:#f8f9fa;border-left:3px solid #6c757d;"
+                    f"padding:10px 14px;border-radius:4px;margin:10px 0;"
+                    f"font-size:0.9em;line-height:1.6'>{explanation}</div>",
+                    unsafe_allow_html=True,
+                )
+
             if asset["history"] is not None:
                 hist = asset["history"].tail(60)
                 fig = go.Figure()

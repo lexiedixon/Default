@@ -104,7 +104,96 @@ def _build_signals(
     return signals
 
 
-def analyze_yfinance_asset(data: dict, risk_level: str, time_horizon: str) -> dict:
+def generate_explanation(asset: dict, time_horizon: str) -> str:
+    """Build a plain-English explanation of why this asset scored as it did."""
+    name     = asset["name"]
+    score    = asset["score"]
+    ret_7d   = asset["return_7d"]
+    ret_30d  = asset["return_30d"]
+    ret_90d  = asset["return_90d"]
+    rsi      = asset["rsi"]
+    vol      = asset["volatility"]
+    is_crypto = asset["asset_class"] == "Crypto"
+
+    # Opening sentence based on score band
+    if score >= 70:
+        opener = f"**{name}** ranks as a strong opportunity this cycle"
+    elif score >= 55:
+        opener = f"**{name}** presents a solid opportunity"
+    elif score >= 40:
+        opener = f"**{name}** shows a moderate opportunity"
+    else:
+        opener = f"**{name}** scores below average — worth monitoring but not a clear buy signal"
+
+    reasons, caveats = [], []
+
+    if time_horizon == "short":
+        if ret_7d > 0.08:
+            reasons.append(f"an exceptional **+{ret_7d:.1%} gain this week** signals strong near-term buying pressure")
+        elif ret_7d > 0.03:
+            reasons.append(f"a **+{ret_7d:.1%} weekly gain** shows emerging upward momentum")
+        elif ret_7d < -0.08:
+            reasons.append(f"a **{ret_7d:.1%} weekly dip** has pushed it into a potential bounce zone")
+        elif ret_7d < -0.03:
+            reasons.append(f"recent weakness (**{ret_7d:.1%} this week**) may be creating a short-term entry point")
+
+        if not is_crypto:
+            if 45 <= rsi <= 62:
+                reasons.append(f"an RSI of **{rsi:.0f}** sits in a healthy momentum zone with room to run before becoming overbought")
+            elif rsi < 35:
+                reasons.append(f"an RSI of **{rsi:.0f}** signals oversold conditions — a near-term reversal is statistically likely")
+            elif rsi > 70:
+                caveats.append(f"the RSI of **{rsi:.0f}** is in overbought territory, meaning a pullback is possible before the next leg up")
+
+        if vol > 0.45:
+            caveats.append(f"annualized volatility of **{vol:.0%}** makes this a higher-risk trade — size positions accordingly")
+        if ret_30d < -0.10:
+            caveats.append(f"the 30-day trend is still negative (**{ret_30d:.1%}**), so confirm momentum before entering")
+
+    else:  # long
+        if ret_90d > 0.25:
+            reasons.append(f"a **+{ret_90d:.1%} return over 3 months** demonstrates a strong, sustained uptrend")
+        elif ret_90d > 0.08:
+            reasons.append(f"a steady **+{ret_90d:.1%} quarterly gain** shows consistent upward momentum")
+        elif ret_90d < -0.10:
+            caveats.append(f"a **{ret_90d:.1%} decline over 3 months** is a headwind — the long-term thesis needs a catalyst to reverse")
+
+        if ret_30d > 0 and ret_90d > 0:
+            reasons.append("both the **30-day and 90-day returns are positive**, confirming the uptrend is holding across timeframes")
+        elif ret_30d < 0 < ret_90d:
+            caveats.append("the **30-day return has turned negative** even as the 90-day remains positive — watch for trend continuation")
+
+        if not is_crypto and vol < 0.15:
+            reasons.append(f"low annualized volatility of **{vol:.0%}** makes this a stable, lower-risk long-term hold")
+        elif vol > 0.50:
+            caveats.append(f"annualized volatility of **{vol:.0%}** is high — appropriate for an aggressive allocation only")
+
+        if not is_crypto and rsi > 70:
+            caveats.append(f"an RSI of **{rsi:.0f}** suggests the asset is extended — consider scaling in gradually rather than buying all at once")
+        elif not is_crypto and 40 <= rsi <= 60:
+            reasons.append(f"an RSI of **{rsi:.0f}** is in a neutral, healthy zone — not overextended")
+
+    # Score sentence
+    if score >= 70:
+        score_line = f"These signals align strongly, producing an opportunity score of **{score}/100**."
+    elif score >= 55:
+        score_line = f"On balance the positives outweigh the risks, resulting in a score of **{score}/100**."
+    elif score >= 40:
+        score_line = f"Mixed signals keep the score at **{score}/100** — this is a watchlist candidate rather than a high-conviction pick."
+    else:
+        score_line = f"Weak signals across the board produce a low score of **{score}/100** — consider waiting for a clearer setup."
+
+    # Assemble
+    parts = [opener + "."]
+    if reasons:
+        parts.append("It was selected because " + (", and ".join(reasons)) + ".")
+    if caveats:
+        parts.append("Note: " + " Additionally, ".join(caveats) + ".")
+    parts.append(score_line)
+    return " ".join(parts)
+
+
+
     hist = data["history"]
     closes = hist["Close"]
     ticker = data["ticker"]
@@ -139,7 +228,7 @@ def analyze_yfinance_asset(data: dict, risk_level: str, time_horizon: str) -> di
     commodity_names = {v: k for k, v in COMMODITY_UNIVERSE.items()}
     display = data.get("display_name") or commodity_names.get(ticker) or ticker
 
-    return {
+    asset = {
         "ticker": ticker,
         "name": display,
         "asset_class": data.get("asset_class", "Stock/ETF"),
@@ -154,6 +243,8 @@ def analyze_yfinance_asset(data: dict, risk_level: str, time_horizon: str) -> di
         "history": hist,
         "news": data.get("news", []),
     }
+    asset["explanation"] = generate_explanation(asset, time_horizon)
+    return asset
 
 
 def analyze_crypto_asset(coin: dict, risk_level: str, time_horizon: str) -> dict:
@@ -204,7 +295,7 @@ def analyze_crypto_asset(coin: dict, risk_level: str, time_horizon: str) -> dict
         if mcap_b > 50:
             signals.append(f"Large cap (${mcap_b:.0f}B) — lower risk")
 
-    return {
+    asset = {
         "ticker": coin["symbol"].upper(),
         "name": coin["name"],
         "asset_class": "Crypto",
@@ -220,6 +311,8 @@ def analyze_crypto_asset(coin: dict, risk_level: str, time_horizon: str) -> dict
         "news": [],
         "market_cap": coin.get("market_cap", 0),
     }
+    asset["explanation"] = generate_explanation(asset, time_horizon)
+    return asset
 
 
 def get_top_picks(
