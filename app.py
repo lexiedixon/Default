@@ -316,8 +316,8 @@ if all_scored:
             "RSI": "{:.1f}",
             "Score": "{:.1f}",
         })
-        .applymap(color_return, subset=["7D Return", "30D Return"])
-        .applymap(color_score, subset=["Score"])
+        .map(color_return, subset=["7D Return", "30D Return"])
+        .map(color_score, subset=["Score"])
     )
     st.dataframe(styled, use_container_width=True, height=450)
 
