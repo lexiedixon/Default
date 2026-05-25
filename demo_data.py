@@ -71,7 +71,7 @@ def get_mock_stocks(categories: list[str]) -> list[dict]:
             "display_name": s["display_name"],
             "asset_class": "Stock/ETF",
             "history": _make_price_history(s["start"], drift=s["drift"], vol=s["vol"]),
-            "fast_info": {},
+
             "news": [
                 {"title": f"{s['display_name']} reports strong quarterly earnings beat", "link": "#", "publisher": "Reuters", "providerPublishTime": int(datetime.now().timestamp()) - 3600},
                 {"title": f"Analysts upgrade {s['ticker']} on growth momentum", "link": "#", "publisher": "Bloomberg", "providerPublishTime": int(datetime.now().timestamp()) - 86400},
@@ -88,7 +88,7 @@ def get_mock_commodities() -> list[dict]:
             "display_name": c["display_name"],
             "asset_class": "Commodity",
             "history": _make_price_history(c["start"], drift=c["drift"], vol=c["vol"]),
-            "fast_info": {},
+
             "news": [],
         }
         for c in MOCK_COMMODITIES

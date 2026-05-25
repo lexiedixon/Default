@@ -61,12 +61,10 @@ def fetch_ticker_data(ticker: str) -> dict | None:
         hist = t.history(period="3mo")
         if hist.empty or len(hist) < 10:
             return None
-        info = t.fast_info
         news = getattr(t, "news", [])[:8]
         return {
             "ticker": ticker,
             "history": hist,
-            "fast_info": info,
             "news": news,
         }
     except Exception:
