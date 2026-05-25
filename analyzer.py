@@ -17,6 +17,20 @@ HORIZON_WEIGHTS = {
     },
 }
 
+# Sell scoring weights: higher score = stronger exit/avoid signal.
+SELL_WEIGHTS = {
+    "short": {
+        "Conservative": {"rsi_ext": 0.35, "neg_7d": 0.25, "neg_30d": 0.15, "neg_90d": 0.00, "neg_sent": 0.15, "vol_risk": 0.10},
+        "Moderate":     {"rsi_ext": 0.25, "neg_7d": 0.35, "neg_30d": 0.15, "neg_90d": 0.00, "neg_sent": 0.15, "vol_risk": 0.10},
+        "Aggressive":   {"rsi_ext": 0.15, "neg_7d": 0.45, "neg_30d": 0.15, "neg_90d": 0.00, "neg_sent": 0.15, "vol_risk": 0.10},
+    },
+    "long": {
+        "Conservative": {"rsi_ext": 0.15, "neg_7d": 0.00, "neg_30d": 0.30, "neg_90d": 0.40, "neg_sent": 0.05, "vol_risk": 0.10},
+        "Moderate":     {"rsi_ext": 0.10, "neg_7d": 0.05, "neg_30d": 0.25, "neg_90d": 0.40, "neg_sent": 0.05, "vol_risk": 0.15},
+        "Aggressive":   {"rsi_ext": 0.05, "neg_7d": 0.10, "neg_30d": 0.20, "neg_90d": 0.40, "neg_sent": 0.05, "vol_risk": 0.20},
+    },
+}
+
 
 def calculate_rsi(prices: pd.Series, period: int = 14) -> float:
     if len(prices) < period + 1:
@@ -349,5 +363,258 @@ def get_top_picks(
             except Exception:
                 continue
 
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:top_n]
+
+
+# ── Sell / Exit Signal Scoring ────────────────────────────────────────────────
+
+def _score_rsi_extended(rsi: float) -> float:
+    """0 = neutral/oversold, 1 = heavily overbought (RSI ≥ 82)."""
+    if rsi <= 60:
+        return 0.0
+    if rsi >= 82:
+        return 1.0
+    return (rsi - 60) / 22
+
+
+def _score_neg_return(pct: float, worst: float = -0.40) -> float:
+    """0 = zero or positive, 1 = at-or-below worst."""
+    if pct >= 0:
+        return 0.0
+    return min(1.0, abs(pct) / abs(worst))
+
+
+def _score_vol_risk(volatility: float) -> float:
+    return min(1.0, volatility / 0.8)
+
+
+def _build_sell_signals(
+    ret_7d: float,
+    ret_30d: float,
+    ret_90d: float,
+    rsi: float,
+    sentiment_norm: float,
+    volatility: float,
+    time_horizon: str,
+) -> list[str]:
+    signals = []
+    if time_horizon == "short":
+        if rsi > 75:
+            signals.append(f"RSI {rsi:.0f} — heavily overbought")
+        elif rsi > 68:
+            signals.append(f"RSI {rsi:.0f} — entering overbought zone")
+        if ret_7d < -0.08:
+            signals.append(f"{ret_7d:.1%} this week — sharp decline")
+        elif ret_7d < -0.03:
+            signals.append(f"{ret_7d:.1%} this week — weakening")
+        if ret_7d > 0.12 and rsi > 68:
+            signals.append(f"Up +{ret_7d:.1%} but RSI {rsi:.0f} — overextended")
+        if sentiment_norm < 0.35:
+            signals.append("Negative news flow")
+        if volatility > 0.45:
+            signals.append(f"High volatility ({volatility:.0%}) — elevated risk")
+    else:
+        if ret_90d < -0.15:
+            signals.append(f"{ret_90d:.1%} over 3 months — sustained downtrend")
+        elif ret_90d < -0.05:
+            signals.append(f"{ret_90d:.1%} quarterly — trend deteriorating")
+        if ret_30d < 0 and ret_90d < 0:
+            signals.append("Both 30d & 90d negative — downtrend confirmed")
+        if rsi > 72:
+            signals.append(f"RSI {rsi:.0f} — may be topping out")
+        if volatility > 0.50:
+            signals.append(f"Very high volatility ({volatility:.0%})")
+    return signals
+
+
+def generate_sell_explanation(asset: dict, time_horizon: str) -> str:
+    name    = asset["name"]
+    score   = asset["score"]
+    ret_7d  = asset["return_7d"]
+    ret_30d = asset["return_30d"]
+    ret_90d = asset["return_90d"]
+    rsi     = asset["rsi"]
+    vol     = asset["volatility"]
+    is_crypto = asset["asset_class"] == "Crypto"
+
+    if score >= 70:
+        opener = f"**{name}** shows strong exit signals"
+    elif score >= 50:
+        opener = f"**{name}** shows moderate exit signals worth considering"
+    else:
+        opener = f"**{name}** has some cautionary flags, though conviction is low"
+
+    reasons, caveats = [], []
+
+    if time_horizon == "short":
+        if not is_crypto:
+            if rsi > 75:
+                reasons.append(f"an RSI of **{rsi:.0f}** is deeply overbought — historically a precursor to a pullback")
+            elif rsi > 68:
+                reasons.append(f"an RSI of **{rsi:.0f}** is entering overbought territory, limiting near-term upside")
+        if ret_7d < -0.08:
+            reasons.append(f"a sharp **{ret_7d:.1%} decline this week** signals accelerating selling pressure")
+        elif ret_7d < -0.03:
+            reasons.append(f"a **{ret_7d:.1%} weekly decline** shows near-term momentum has turned negative")
+        if ret_7d > 0.12 and rsi > 68:
+            reasons.append(f"after a **+{ret_7d:.1%} surge this week** against an overbought RSI, profit-taking risk is elevated")
+        if vol > 0.45:
+            caveats.append(f"high volatility (**{vol:.0%}** annualized) means a snap-back rally is also possible")
+    else:
+        if ret_90d < -0.15:
+            reasons.append(f"a **{ret_90d:.1%} decline over 3 months** represents a sustained and confirmed downtrend")
+        elif ret_90d < -0.05:
+            reasons.append(f"a **{ret_90d:.1%} quarterly return** shows the long-term uptrend has stalled")
+        if ret_30d < 0 and ret_90d < 0:
+            reasons.append("both the **30-day and 90-day returns are negative**, confirming this is not a temporary dip")
+        if not is_crypto and rsi > 72:
+            reasons.append(f"an RSI of **{rsi:.0f}** suggests the asset is overextended relative to its weakening trend")
+        if vol > 0.50:
+            reasons.append(f"annualized volatility of **{vol:.0%}** makes large drawdowns likely for long-term holders")
+
+    if score >= 70:
+        score_line = f"These factors combine for a sell signal score of **{score}/100** — a high-conviction exit."
+    elif score >= 50:
+        score_line = f"The exit case is moderately strong at **{score}/100** — consider reducing or exiting the position."
+    else:
+        score_line = f"With a score of **{score}/100**, treat this as a watchlist flag rather than an urgent exit."
+
+    parts = [opener + "."]
+    if reasons:
+        parts.append("Key reasons: " + (", and ".join(reasons)) + ".")
+    if caveats:
+        parts.append("Caveat: " + " ".join(caveats) + ".")
+    parts.append(score_line)
+    return " ".join(parts)
+
+
+def _sell_yfinance(data: dict, risk_level: str, time_horizon: str) -> dict:
+    hist   = data["history"]
+    closes = hist["Close"]
+    ticker = data["ticker"]
+    w      = SELL_WEIGHTS[time_horizon][risk_level]
+
+    ret_7d  = (closes.iloc[-1] / closes.iloc[-6]  - 1) if len(closes) >= 6  else 0.0
+    ret_30d = (closes.iloc[-1] / closes.iloc[-22] - 1) if len(closes) >= 22 else 0.0
+    ret_90d = (closes.iloc[-1] / closes.iloc[0]   - 1) if len(closes) >= 60 else ret_30d
+    volatility = closes.pct_change().std() * np.sqrt(252)
+    rsi = calculate_rsi(closes)
+    sentiment_norm = (score_news_sentiment(data.get("news", [])) + 1) / 2
+
+    raw = (
+        w["rsi_ext"]  * _score_rsi_extended(rsi)
+        + w["neg_7d"]   * _score_neg_return(ret_7d,  -0.30)
+        + w["neg_30d"]  * _score_neg_return(ret_30d, -0.40)
+        + w["neg_90d"]  * _score_neg_return(ret_90d, -0.50)
+        + w["neg_sent"] * (1.0 - sentiment_norm)
+        + w["vol_risk"] * _score_vol_risk(volatility)
+    )
+    score = round(max(0.0, min(100.0, raw * 100)), 1)
+
+    commodity_names = {v: k for k, v in COMMODITY_UNIVERSE.items()}
+    display = data.get("display_name") or commodity_names.get(ticker) or ticker
+
+    asset = {
+        "ticker": ticker,
+        "name": display,
+        "asset_class": data.get("asset_class", "Stock/ETF"),
+        "price": round(float(closes.iloc[-1]), 2),
+        "return_7d": ret_7d,
+        "return_30d": ret_30d,
+        "return_90d": ret_90d,
+        "rsi": round(rsi, 1),
+        "volatility": round(volatility, 3),
+        "score": score,
+        "signals": _build_sell_signals(ret_7d, ret_30d, ret_90d, rsi, sentiment_norm, volatility, time_horizon),
+        "history": hist,
+        "news": data.get("news", []),
+    }
+    asset["explanation"] = generate_sell_explanation(asset, time_horizon)
+    return asset
+
+
+def _sell_crypto(coin: dict, risk_level: str, time_horizon: str) -> dict:
+    w = SELL_WEIGHTS[time_horizon][risk_level]
+
+    ret_7d  = (coin.get("price_change_percentage_7d_in_currency")  or 0) / 100
+    ret_30d = (coin.get("price_change_percentage_30d_in_currency") or 0) / 100
+    ret_24h = (coin.get("price_change_percentage_24h") or 0) / 100
+    ret_90d = ret_30d
+
+    raw = (
+        w["rsi_ext"]  * 0.5
+        + w["neg_7d"]   * _score_neg_return(ret_7d,  -0.40)
+        + w["neg_30d"]  * _score_neg_return(ret_30d, -0.50)
+        + w["neg_90d"]  * _score_neg_return(ret_90d, -0.50)
+        + w["neg_sent"] * 0.5
+        + w["vol_risk"] * min(1.0, abs(ret_30d) * 2)
+    )
+    score = round(max(0.0, min(100.0, raw * 100)), 1)
+
+    signals = []
+    if time_horizon == "short":
+        if ret_24h < -0.05:
+            signals.append(f"{ret_24h:.1%} today — sharp drop")
+        if ret_7d < -0.12:
+            signals.append(f"{ret_7d:.1%} this week — momentum negative")
+        if ret_7d > 0.15:
+            signals.append(f"Up +{ret_7d:.1%} this week — overextended?")
+    else:
+        if ret_30d < -0.15:
+            signals.append(f"{ret_30d:.1%} this month — sustained weakness")
+        if ret_7d < 0 and ret_30d < 0:
+            signals.append("Both 7d & 30d negative — confirmed downtrend")
+
+    asset = {
+        "ticker": coin["symbol"].upper(),
+        "name": coin["name"],
+        "asset_class": "Crypto",
+        "price": coin.get("current_price", 0),
+        "return_7d": ret_7d,
+        "return_30d": ret_30d,
+        "return_90d": ret_90d,
+        "rsi": 50.0,
+        "volatility": abs(ret_30d) * 2,
+        "score": score,
+        "signals": signals,
+        "history": None,
+        "news": [],
+        "market_cap": coin.get("market_cap", 0),
+    }
+    asset["explanation"] = generate_sell_explanation(asset, time_horizon)
+    return asset
+
+
+def get_sell_picks(
+    stock_data: list[dict],
+    commodity_data: list[dict],
+    crypto_raw: list[dict],
+    risk_level: str,
+    include_crypto: bool,
+    include_commodities: bool,
+    top_n: int,
+    time_horizon: str = "short",
+) -> list[dict]:
+    scored = []
+    for d in stock_data:
+        d["asset_class"] = "Stock/ETF"
+        try:
+            scored.append(_sell_yfinance(d, risk_level, time_horizon))
+        except Exception:
+            continue
+    if include_commodities:
+        for d in commodity_data:
+            d["asset_class"] = "Commodity"
+            try:
+                scored.append(_sell_yfinance(d, risk_level, time_horizon))
+            except Exception:
+                continue
+    if include_crypto:
+        for coin in crypto_raw:
+            try:
+                scored.append(_sell_crypto(coin, risk_level, time_horizon))
+            except Exception:
+                continue
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:top_n]

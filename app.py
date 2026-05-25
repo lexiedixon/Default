@@ -10,7 +10,7 @@ from data_fetcher import (
     fetch_crypto_data,
     STOCK_UNIVERSE,
 )
-from analyzer import get_top_picks
+from analyzer import get_top_picks, get_sell_picks
 from news_analyzer import enrich_picks_with_news_analysis
 
 st.set_page_config(
@@ -152,6 +152,17 @@ short_picks = get_top_picks(
     include_commodities=include_commodities, top_n=top_n, time_horizon="short",
 )
 long_picks = get_top_picks(
+    stock_data, commodity_data, crypto_raw,
+    risk_level=risk_level, include_crypto=include_crypto,
+    include_commodities=include_commodities, top_n=top_n, time_horizon="long",
+)
+
+short_sell_picks = get_sell_picks(
+    stock_data, commodity_data, crypto_raw,
+    risk_level=risk_level, include_crypto=include_crypto,
+    include_commodities=include_commodities, top_n=top_n, time_horizon="short",
+)
+long_sell_picks = get_sell_picks(
     stock_data, commodity_data, crypto_raw,
     risk_level=risk_level, include_crypto=include_crypto,
     include_commodities=include_commodities, top_n=top_n, time_horizon="long",
@@ -330,6 +341,126 @@ with tab_short:
 
 with tab_long:
     render_picks(long_picks, "long")
+
+
+# ── Sell / Exit Signals ───────────────────────────────────────────────────────
+st.divider()
+st.subheader("🔴 Sell / Exit Signals")
+st.markdown(
+    "Assets showing weakness, overextension, or deteriorating trend — "
+    "candidates to exit, reduce, or avoid."
+)
+
+sell_tab_short, sell_tab_long = st.tabs(
+    ["⚡ Short-Term Exits  (Days – Weeks)", "📈 Long-Term Exits  (Months – Years)"]
+)
+
+
+def render_sell_picks(picks: list[dict], time_horizon: str):
+    if not picks:
+        st.info("No sell signals with current filters.")
+        return
+
+    if time_horizon == "short":
+        st.caption(
+            "Ranked by overbought RSI, negative weekly momentum, and adverse news. "
+            "Suited for traders looking to exit or short near-term."
+        )
+    else:
+        st.caption(
+            "Ranked by sustained negative 90-day trend, high volatility, and weak fundamentals. "
+            "Suited for long-term holders considering reducing or exiting positions."
+        )
+
+    for rank, asset in enumerate(picks, 1):
+        score = asset["score"]
+        badge_class = "score-low" if score >= 65 else ("score-mid" if score >= 40 else "score-high")
+
+        with st.expander(
+            f"#{rank}  {asset['name']} ({asset['ticker']})  —  "
+            f"{asset['asset_class']}  |  Sell Signal: {score}/100",
+            expanded=(rank <= 3),
+            key=f"sell_exp_{time_horizon}_{rank}_{asset['ticker']}",
+        ):
+            col1, col2, col3, col4 = st.columns(4)
+            price = asset["price"]
+            col1.metric("Price", f"${price:,.4f}" if price < 1 else f"${price:,.2f}")
+            if time_horizon == "short":
+                ret7  = asset["return_7d"]
+                ret30 = asset["return_30d"]
+                col2.metric("7-Day Return",  f"{ret7:+.2%}",  delta_color="normal" if ret7  >= 0 else "inverse")
+                col3.metric("30-Day Return", f"{ret30:+.2%}", delta_color="normal" if ret30 >= 0 else "inverse")
+            else:
+                ret30 = asset["return_30d"]
+                ret90 = asset["return_90d"]
+                col2.metric("30-Day Return", f"{ret30:+.2%}", delta_color="normal" if ret30 >= 0 else "inverse")
+                col3.metric("90-Day Return", f"{ret90:+.2%}", delta_color="normal" if ret90 >= 0 else "inverse")
+            col4.metric("RSI", f"{asset['rsi']:.1f}")
+
+            if asset["signals"]:
+                st.markdown(
+                    " ".join(f'<span class="signal-chip">{s}</span>' for s in asset["signals"]),
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                f'<span class="score-badge score-low">Sell Signal Score: {score}/100</span>',
+                unsafe_allow_html=True,
+            )
+
+            explanation = asset.get("explanation", "")
+            if explanation:
+                st.markdown(
+                    f"<div style='background:#fff5f5;border-left:3px solid #dc3545;"
+                    f"padding:10px 14px;border-radius:4px;margin:10px 0;"
+                    f"font-size:0.9em;line-height:1.6'>{explanation}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            if asset["history"] is not None:
+                hist = asset["history"].tail(60)
+                fig = go.Figure()
+                fig.add_trace(go.Candlestick(
+                    x=hist.index,
+                    open=hist["Open"],
+                    high=hist["High"],
+                    low=hist["Low"],
+                    close=hist["Close"],
+                    name=asset["ticker"],
+                    increasing_line_color="#28a745",
+                    decreasing_line_color="#dc3545",
+                ))
+                fig.update_layout(
+                    height=280,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    xaxis_rangeslider_visible=False,
+                    showlegend=False,
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig, use_container_width=True,
+                                key=f"sell_chart_{time_horizon}_{rank}_{asset['ticker']}")
+
+            news = asset.get("news", [])
+            if news:
+                st.markdown("**Recent News**")
+                for item in news[:4]:
+                    title     = item.get("title", "")
+                    link      = item.get("link", "#")
+                    publisher = item.get("publisher", "")
+                    ts        = item.get("providerPublishTime", 0)
+                    date_str  = datetime.fromtimestamp(ts).strftime("%b %d") if ts else ""
+                    st.markdown(
+                        f"- [{title}]({link})  <small style='color:gray'>{publisher} · {date_str}</small>",
+                        unsafe_allow_html=True,
+                    )
+
+
+with sell_tab_short:
+    render_sell_picks(short_sell_picks, "short")
+
+with sell_tab_long:
+    render_sell_picks(long_sell_picks, "long")
 
 
 # ── All Assets Table ──────────────────────────────────────────────────────────
